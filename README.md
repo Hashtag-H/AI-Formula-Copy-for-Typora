@@ -5,6 +5,7 @@
 ## 功能
 
 - 在常见 AI 聊天页面右键选区，选择 `复制为 Typora Markdown`。
+- 在常见 AI 聊天页面选中内容后，直接按 `Ctrl+C` 也会自动转换。
 - 快捷键：`Ctrl+Shift+Y`，macOS 为 `Command+Shift+Y`。
 - 把 ChatGPT 常见的 LaTeX 分隔符转换为 Typora 常用格式：
 
@@ -60,7 +61,7 @@ $$
 
 1. 打开已支持的 AI 聊天网页。
 2. 选中包含公式的回答内容。
-3. 右键点击选区，选择 `复制为 Typora Markdown`。
+3. 按 `Ctrl+C`，或右键点击选区并选择 `复制为 Typora Markdown`。
 4. 切换到 Typora，正常粘贴。
 
 也可以选中内容后直接按 `Ctrl+Shift+Y`。

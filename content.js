@@ -9,23 +9,41 @@
       .then((result) => sendResponse(result))
       .catch((error) => {
         console.error("[Copy for Typora]", error);
-        showToast("复制失败，请重新选中内容后再试");
+        showToast("Copy failed. Select text and try again.");
         sendResponse({ ok: false, error: String(error) });
       });
 
     return true;
   });
 
+  document.addEventListener(
+    "copy",
+    (event) => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || isSelectionInEditable(selection)) return;
+      if (!event.clipboardData) return;
+
+      const markdown = getSelectionAsTyporaMarkdown();
+      if (!markdown.trim()) return;
+
+      event.clipboardData.setData("text/plain", markdown);
+      event.clipboardData.setData("text/markdown", markdown);
+      event.preventDefault();
+      showToast("Copied for Typora");
+    },
+    true
+  );
+
   async function copySelectionForTypora() {
     const markdown = getSelectionAsTyporaMarkdown();
 
     if (!markdown.trim()) {
-      showToast("请先选中 ChatGPT 回复内容");
+      showToast("Select an AI answer first.");
       return { ok: false, error: "empty-selection" };
     }
 
-    await navigator.clipboard.writeText(markdown);
-    showToast("已复制为 Typora Markdown");
+    await writeClipboardText(markdown);
+    showToast("Copied for Typora");
     return { ok: true, text: markdown };
   }
 
@@ -52,7 +70,7 @@
     for (const node of displayMathNodes) {
       const tex = getTexFromMathNode(node);
       if (!tex) continue;
-      node.replaceWith(document.createTextNode(`\n\n$$\n${tex.trim()}\n$$\n\n`));
+      replaceWithMathText(node, tex, true);
     }
 
     const inlineMathNodes = [...root.querySelectorAll(".katex")].filter(
@@ -61,18 +79,29 @@
     for (const node of inlineMathNodes) {
       const tex = getTexFromMathNode(node);
       if (!tex) continue;
-      node.replaceWith(document.createTextNode(`$${tex.trim()}$`));
+      replaceWithMathText(node, tex, false);
     }
 
-    const mathJaxNodes = [...root.querySelectorAll("mjx-container")];
+    const mathJaxNodes = [...root.querySelectorAll("mjx-container, .MathJax")];
     for (const node of mathJaxNodes) {
-      const tex = node.getAttribute("data-original-tex") || node.getAttribute("aria-label");
+      const tex = getTexFromMathNode(node);
       if (!tex) continue;
-      const isBlock = node.getAttribute("display") === "true" || node.closest("[display='true']");
-      node.replaceWith(
-        document.createTextNode(isBlock ? `\n\n$$\n${tex.trim()}\n$$\n\n` : `$${tex.trim()}$`)
-      );
+      const isBlock = isDisplayMathNode(node);
+      replaceWithMathText(node, tex, isBlock);
     }
+
+    const mathTexScripts = [...root.querySelectorAll("script[type^='math/tex']")];
+    for (const node of mathTexScripts) {
+      const type = node.getAttribute("type") || "";
+      const isBlock = /mode=display|; *mode=display/i.test(type);
+      replaceWithMathText(node, node.textContent || "", isBlock);
+    }
+  }
+
+  function replaceWithMathText(node, tex, isBlock) {
+    const trimmed = tex.trim();
+    if (!trimmed) return;
+    node.replaceWith(document.createTextNode(isBlock ? `\n\n$$\n${trimmed}\n$$\n\n` : `$${trimmed}$`));
   }
 
   function getTexFromMathNode(node) {
@@ -82,47 +111,77 @@
     const math = node.querySelector("math[alttext], math[altText]");
     if (math) return math.getAttribute("alttext") || math.getAttribute("altText");
 
-    return node.getAttribute("data-tex") || node.getAttribute("aria-label") || "";
+    return (
+      node.getAttribute("data-original-tex") ||
+      node.getAttribute("data-tex") ||
+      node.getAttribute("aria-label") ||
+      node.getAttribute("alttext") ||
+      node.getAttribute("altText") ||
+      ""
+    );
+  }
+
+  function isDisplayMathNode(node) {
+    return (
+      node.classList?.contains("katex-display") ||
+      node.getAttribute("display") === "true" ||
+      node.getAttribute("data-display") === "true" ||
+      node.closest?.(".katex-display, [display='true'], [data-display='true']")
+    );
   }
 
   function domToMarkdownText(root) {
-    const lines = [];
+    const chunks = [];
 
     walk(root, { inPre: false });
 
-    return cleanupSpacing(lines.join(""));
+    return cleanupSpacing(chunks.join(""));
 
     function walk(node, context) {
       if (node.nodeType === Node.TEXT_NODE) {
-        lines.push(node.nodeValue || "");
+        chunks.push(node.nodeValue || "");
         return;
       }
 
       if (node.nodeType !== Node.ELEMENT_NODE) return;
 
       const tagName = node.tagName.toLowerCase();
+      if (["script", "style", "button", "svg"].includes(tagName)) return;
+      if (!context.inPre && isHidden(node)) return;
+
       const nextContext = { ...context, inPre: context.inPre || tagName === "pre" };
 
       if (tagName === "br") {
-        lines.push("\n");
+        chunks.push("\n");
         return;
       }
 
       if (tagName === "pre") {
         const code = node.querySelector("code");
         const language = getCodeLanguage(code || node);
-        lines.push(`\n\n\`\`\`${language}\n${(code || node).textContent.trimEnd()}\n\`\`\`\n\n`);
+        chunks.push(`\n\n\`\`\`${language}\n${(code || node).textContent.trimEnd()}\n\`\`\`\n\n`);
         return;
       }
 
-      if (tagName === "li") lines.push("- ");
+      if (tagName === "li") chunks.push("- ");
 
       for (const child of node.childNodes) walk(child, nextContext);
 
-      if (["p", "div", "section", "article", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6"].includes(tagName)) {
-        lines.push(context.inPre ? "" : "\n");
+      if (["p", "div", "section", "article", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr"].includes(tagName)) {
+        chunks.push(context.inPre ? "" : "\n");
       }
     }
+  }
+
+  function isHidden(node) {
+    const ariaHidden = node.getAttribute("aria-hidden");
+    if (ariaHidden === "true") return true;
+
+    const hidden = node.hidden || node.getAttribute("hidden") !== null;
+    if (hidden) return true;
+
+    const style = node.getAttribute("style") || "";
+    return /display\s*:\s*none|visibility\s*:\s*hidden/i.test(style);
   }
 
   function getCodeLanguage(node) {
@@ -157,6 +216,49 @@
       .replace(/[ \t]+\n/g, "\n")
       .replace(/\n[ \t]+/g, "\n")
       .replace(/\n{3,}/g, "\n\n");
+  }
+
+  async function writeClipboardText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      fallbackCopyText(text);
+    }
+  }
+
+  function fallbackCopyText(text) {
+    const selection = window.getSelection();
+    const ranges = [];
+    if (selection) {
+      for (let index = 0; index < selection.rangeCount; index += 1) {
+        ranges.push(selection.getRangeAt(index).cloneRange());
+      }
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    Object.assign(textarea.style, {
+      position: "fixed",
+      left: "-9999px",
+      top: "0",
+      opacity: "0"
+    });
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+
+    if (selection) {
+      selection.removeAllRanges();
+      for (const range of ranges) selection.addRange(range);
+    }
+  }
+
+  function isSelectionInEditable(selection) {
+    const node = selection.anchorNode;
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    return Boolean(element?.closest("input, textarea, [contenteditable='true'], [contenteditable='plaintext-only']"));
   }
 
   function showToast(message) {
