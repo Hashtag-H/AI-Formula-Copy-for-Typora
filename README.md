@@ -7,6 +7,7 @@
 - 在常见 AI 聊天页面右键选区，选择 `复制为 Typora Markdown`。
 - 在常见 AI 聊天页面选中内容后，直接按 `Ctrl+C` 也会自动转换。
 - 快捷键：`Ctrl+Shift+Y`，macOS 为 `Command+Shift+Y`。
+- 针对 ChatGPT 当前页面，会优先从真实 KaTeX / MathJax 节点提取原始 TeX。
 - 把 ChatGPT 常见的 LaTeX 分隔符转换为 Typora 常用格式：
 
 ```text

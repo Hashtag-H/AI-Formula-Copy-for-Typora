@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Formula Copy for Typora",
   "description": "Copy AI chat answers as Typora-friendly Markdown with LaTeX formulas normalized.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "permissions": ["contextMenus", "activeTab", "scripting", "clipboardWrite"],
   "host_permissions": [
     "https://chatgpt.com/*",

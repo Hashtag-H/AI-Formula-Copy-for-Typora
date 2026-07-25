@@ -56,13 +56,23 @@
     const parts = [];
     for (let index = 0; index < selection.rangeCount; index += 1) {
       const range = selection.getRangeAt(index);
-      const container = document.createElement("div");
-      container.appendChild(range.cloneContents());
-      normalizeMathNodes(container);
-      parts.push(domToMarkdownText(container));
+      parts.push(rangeToMarkdownText(range));
     }
 
     return normalizeTyporaMath(parts.join("\n"));
+  }
+
+  function rangeToMarkdownText(range) {
+    const commonNode = range.commonAncestorContainer;
+    const commonElement = commonNode.nodeType === Node.ELEMENT_NODE ? commonNode : commonNode.parentElement;
+    const mathRoot = closestMathRoot(commonElement);
+    const root = mathRoot && nodeIntersectsRange(mathRoot, range) ? mathRoot : commonElement;
+
+    if (!root) return range.toString();
+
+    const chunks = [];
+    walkSelected(root, range, chunks, { inPre: false });
+    return cleanupSpacing(chunks.join(""));
   }
 
   function normalizeMathNodes(root) {
@@ -98,13 +108,68 @@
     }
   }
 
+  function walkSelected(node, range, chunks, context) {
+    if (!nodeIntersectsRange(node, range)) return;
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      chunks.push(getSelectedTextFromTextNode(node, range));
+      return;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const tagName = node.tagName.toLowerCase();
+    if (["script", "style", "button", "svg"].includes(tagName) && !isMathTexScript(node)) return;
+    if (!context.inPre && isHidden(node) && !closestMathRoot(node)) return;
+
+    const selectedMathRoot = getMathRootForCurrentElement(node);
+    if (selectedMathRoot === node) {
+      const tex = getTexFromMathNode(node);
+      if (tex) {
+        chunks.push(formatMathText(tex, isDisplayMathNode(node)));
+        return;
+      }
+    }
+
+    const nextContext = { ...context, inPre: context.inPre || tagName === "pre" };
+
+    if (tagName === "br") {
+      chunks.push("\n");
+      return;
+    }
+
+    if (tagName === "pre") {
+      const code = node.querySelector("code");
+      const language = getCodeLanguage(code || node);
+      chunks.push(`\n\n\`\`\`${language}\n${(code || node).textContent.trimEnd()}\n\`\`\`\n\n`);
+      return;
+    }
+
+    if (tagName === "li") chunks.push("- ");
+
+    for (const child of node.childNodes) {
+      walkSelected(child, range, chunks, nextContext);
+    }
+
+    if (["p", "div", "section", "article", "blockquote", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr"].includes(tagName)) {
+      chunks.push(context.inPre ? "" : "\n");
+    }
+  }
+
   function replaceWithMathText(node, tex, isBlock) {
     const trimmed = tex.trim();
     if (!trimmed) return;
-    node.replaceWith(document.createTextNode(isBlock ? `\n\n$$\n${trimmed}\n$$\n\n` : `$${trimmed}$`));
+    node.replaceWith(document.createTextNode(formatMathText(trimmed, isBlock)));
+  }
+
+  function formatMathText(tex, isBlock) {
+    const trimmed = tex.trim();
+    return isBlock ? `\n\n$$\n${trimmed}\n$$\n\n` : `$${trimmed}$`;
   }
 
   function getTexFromMathNode(node) {
+    if (isMathTexScript(node)) return node.textContent || "";
+
     const annotation = node.querySelector("annotation[encoding='application/x-tex']");
     if (annotation?.textContent) return annotation.textContent;
 
@@ -121,13 +186,59 @@
     );
   }
 
+  function getMathRootForCurrentElement(node) {
+    if (isMathTexScript(node)) return node;
+    if (node.matches?.(".katex-display")) return node;
+    if (node.matches?.(".katex") && !node.closest(".katex-display")) return node;
+    if (node.matches?.("mjx-container, .MathJax")) return node;
+    return null;
+  }
+
+  function closestMathRoot(node) {
+    if (!node?.closest) return null;
+    return node.closest(".katex-display, .katex, mjx-container, .MathJax, script[type^='math/tex']");
+  }
+
+  function isMathTexScript(node) {
+    return node?.matches?.("script[type^='math/tex']");
+  }
+
   function isDisplayMathNode(node) {
+    if (isMathTexScript(node)) {
+      const type = node.getAttribute("type") || "";
+      return /mode=display|; *mode=display/i.test(type);
+    }
+
     return (
       node.classList?.contains("katex-display") ||
+      Boolean(node.closest?.(".katex-display")) ||
       node.getAttribute("display") === "true" ||
       node.getAttribute("data-display") === "true" ||
       node.closest?.(".katex-display, [display='true'], [data-display='true']")
     );
+  }
+
+  function nodeIntersectsRange(node, range) {
+    try {
+      return range.intersectsNode(node);
+    } catch {
+      return true;
+    }
+  }
+
+  function getSelectedTextFromTextNode(node, range) {
+    const text = node.nodeValue || "";
+    let start = 0;
+    let end = text.length;
+
+    if (node === range.startContainer) start = range.startOffset;
+    if (node === range.endContainer) end = range.endOffset;
+
+    if (start < 0) start = 0;
+    if (end > text.length) end = text.length;
+    if (end < start) return "";
+
+    return text.slice(start, end);
   }
 
   function domToMarkdownText(root) {
