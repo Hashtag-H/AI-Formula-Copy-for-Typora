@@ -1,6 +1,7 @@
 (() => {
   if (window.__typoraFormulaCopyLoaded) return;
   window.__typoraFormulaCopyLoaded = true;
+  let copyStats = { mathCount: 0 };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "copy-for-typora") return;
@@ -29,7 +30,7 @@
       event.clipboardData.setData("text/plain", markdown);
       event.clipboardData.setData("text/markdown", markdown);
       event.preventDefault();
-      showToast("Copied for Typora");
+      showToast(`Copied for Typora (${copyStats.mathCount} formulas)`);
     },
     true
   );
@@ -43,7 +44,7 @@
     }
 
     await writeClipboardText(markdown);
-    showToast("Copied for Typora");
+    showToast(`Copied for Typora (${copyStats.mathCount} formulas)`);
     return { ok: true, text: markdown };
   }
 
@@ -52,6 +53,8 @@
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
       return "";
     }
+
+    copyStats = { mathCount: 0 };
 
     const parts = [];
     for (let index = 0; index < selection.rangeCount; index += 1) {
@@ -92,7 +95,7 @@
       replaceWithMathText(node, tex, false);
     }
 
-    const mathJaxNodes = [...root.querySelectorAll("mjx-container, .MathJax")];
+    const mathJaxNodes = [...root.querySelectorAll("mjx-container, .MathJax, math")];
     for (const node of mathJaxNodes) {
       const tex = getTexFromMathNode(node);
       if (!tex) continue;
@@ -164,6 +167,7 @@
 
   function formatMathText(tex, isBlock) {
     const trimmed = tex.trim();
+    copyStats.mathCount += 1;
     return isBlock ? `\n\n$$\n${trimmed}\n$$\n\n` : `$${trimmed}$`;
   }
 
@@ -176,9 +180,17 @@
     const math = node.querySelector("math[alttext], math[altText]");
     if (math) return math.getAttribute("alttext") || math.getAttribute("altText");
 
+    const mathmlRoot = node.matches?.("math") ? node : node.querySelector("math");
+    if (mathmlRoot) {
+      const latex = mathmlToLatex(mathmlRoot);
+      if (latex) return latex;
+    }
+
     return (
       node.getAttribute("data-original-tex") ||
+      node.getAttribute("data-latex") ||
       node.getAttribute("data-tex") ||
+      node.getAttribute("data-math") ||
       node.getAttribute("aria-label") ||
       node.getAttribute("alttext") ||
       node.getAttribute("altText") ||
@@ -190,13 +202,13 @@
     if (isMathTexScript(node)) return node;
     if (node.matches?.(".katex-display")) return node;
     if (node.matches?.(".katex") && !node.closest(".katex-display")) return node;
-    if (node.matches?.("mjx-container, .MathJax")) return node;
+    if (node.matches?.("mjx-container, .MathJax, math")) return node;
     return null;
   }
 
   function closestMathRoot(node) {
     if (!node?.closest) return null;
-    return node.closest(".katex-display, .katex, mjx-container, .MathJax, script[type^='math/tex']");
+    return node.closest(".katex-display, .katex, mjx-container, .MathJax, math, script[type^='math/tex']");
   }
 
   function isMathTexScript(node) {
@@ -239,6 +251,140 @@
     if (end < start) return "";
 
     return text.slice(start, end);
+  }
+
+  function mathmlToLatex(node) {
+    if (!node) return "";
+    if (node.nodeType === Node.TEXT_NODE) return normalizeMathSymbol(node.nodeValue || "");
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+
+    const tagName = node.tagName.toLowerCase();
+    const children = [...node.childNodes].filter((child) => {
+      return child.nodeType === Node.TEXT_NODE ? (child.nodeValue || "").trim() : true;
+    });
+    const childLatex = () => children.map(mathmlToLatex).join("");
+    const grouped = (child) => `{${mathmlToLatex(child)}}`;
+
+    switch (tagName) {
+      case "math":
+      case "mrow":
+      case "semantics":
+        return childLatex();
+      case "annotation":
+        return "";
+      case "mi":
+      case "mn":
+        return normalizeMathSymbol(node.textContent || "");
+      case "mo":
+        return normalizeMathOperator(node.textContent || "");
+      case "mtext":
+        return `\\text{${(node.textContent || "").trim()}}`;
+      case "msup":
+        return `${mathmlToLatex(children[0])}^${grouped(children[1])}`;
+      case "msub":
+        return `${mathmlToLatex(children[0])}_${grouped(children[1])}`;
+      case "msubsup":
+        return `${mathmlToLatex(children[0])}_${grouped(children[1])}^${grouped(children[2])}`;
+      case "mfrac":
+        return `\\frac${grouped(children[0])}${grouped(children[1])}`;
+      case "msqrt":
+        return `\\sqrt{${childLatex()}}`;
+      case "mroot":
+        return `\\sqrt[${mathmlToLatex(children[1])}]{${mathmlToLatex(children[0])}}`;
+      case "mover":
+        return `\\overset${grouped(children[1])}${grouped(children[0])}`;
+      case "munder":
+        return `\\underset${grouped(children[1])}${grouped(children[0])}`;
+      case "munderover":
+        return `\\overset${grouped(children[2])}{\\underset${grouped(children[1])}${grouped(children[0])}}`;
+      case "mfenced": {
+        const open = node.getAttribute("open") || "(";
+        const close = node.getAttribute("close") || ")";
+        return `${open}${childLatex()}${close}`;
+      }
+      case "mtable":
+        return matrixToLatex(node);
+      case "mtr":
+        return children.map(mathmlToLatex).join(" & ");
+      case "mtd":
+        return childLatex();
+      default:
+        return childLatex() || normalizeMathSymbol(node.textContent || "");
+    }
+  }
+
+  function matrixToLatex(node) {
+    const rows = [...node.querySelectorAll(":scope > mtr, :scope > mlabeledtr")].map((row) => {
+      return [...row.children].map(mathmlToLatex).join(" & ");
+    });
+    return `\\begin{matrix}${rows.join(" \\\\ ")}\\end{matrix}`;
+  }
+
+  function normalizeMathSymbol(value) {
+    const text = value.trim();
+    if (!text) return "";
+
+    const symbolMap = {
+      "α": "\\alpha",
+      "β": "\\beta",
+      "γ": "\\gamma",
+      "δ": "\\delta",
+      "ε": "\\epsilon",
+      "θ": "\\theta",
+      "λ": "\\lambda",
+      "μ": "\\mu",
+      "π": "\\pi",
+      "ρ": "\\rho",
+      "σ": "\\sigma",
+      "φ": "\\phi",
+      "ω": "\\omega",
+      "Γ": "\\Gamma",
+      "Δ": "\\Delta",
+      "Θ": "\\Theta",
+      "Λ": "\\Lambda",
+      "Π": "\\Pi",
+      "Σ": "\\Sigma",
+      "Φ": "\\Phi",
+      "Ω": "\\Omega",
+      "∞": "\\infty",
+      "∂": "\\partial",
+      "∇": "\\nabla"
+    };
+
+    return symbolMap[text] || text;
+  }
+
+  function normalizeMathOperator(value) {
+    const text = value.trim();
+    const operatorMap = {
+      "−": "-",
+      "×": "\\times",
+      "÷": "\\div",
+      "±": "\\pm",
+      "∓": "\\mp",
+      "≤": "\\le",
+      "≥": "\\ge",
+      "≠": "\\ne",
+      "≈": "\\approx",
+      "∈": "\\in",
+      "∉": "\\notin",
+      "⊂": "\\subset",
+      "⊆": "\\subseteq",
+      "∑": "\\sum",
+      "∏": "\\prod",
+      "∫": "\\int",
+      "√": "\\sqrt",
+      "→": "\\to",
+      "←": "\\leftarrow",
+      "↔": "\\leftrightarrow",
+      "∧": "\\land",
+      "∨": "\\lor",
+      "¬": "\\neg",
+      "∀": "\\forall",
+      "∃": "\\exists"
+    };
+
+    return operatorMap[text] || text;
   }
 
   function domToMarkdownText(root) {
