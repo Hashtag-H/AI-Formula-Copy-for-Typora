@@ -1,0 +1,77 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Formula copy smoke test</title>
+<body>
+  <p id="mixed">Before <span data-math-source="\frac{1}{2}"><span class="rendered">1/2</span></span> after.</p>
+  <div id="block" data-math-source="\[x^2+y^2=z^2\]"><span class="katex-display">rendered</span></div>
+  <p id="katex">A <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>x</mi></mrow><annotation encoding="application/x-tex">x^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true">x2</span></span> B</p>
+  <p id="mathml">C <math><mfrac><mn>1</mn><mn>3</mn></mfrac></math> D</p>
+  <script>
+    window.chrome = { runtime: { onMessage: { addListener() {} } } };
+  </script>
+  <script src="../content.js"></script>
+  <script>
+    const results = [];
+
+    function copySelected() {
+      const data = {};
+      const event = new Event("copy", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: { setData(type, value) { data[type] = value; } }
+      });
+      document.dispatchEvent(event);
+      if (!event.defaultPrevented) throw new Error("Copy event was not handled");
+      if (data["text/plain"] !== data["text/markdown"]) throw new Error("Clipboard formats differ");
+      return data["text/plain"];
+    }
+
+    function assertCopy(name, select, expected) {
+      const selection = getSelection();
+      selection.removeAllRanges();
+      select(selection);
+      const actual = copySelected();
+      if (actual !== expected) throw new Error(`${name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+      results.push(`PASS ${name}`);
+    }
+
+    function selectElement(id, selection) {
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById(id));
+      selection.addRange(range);
+    }
+
+    try {
+      assertCopy("ChatGPT mixed text and formula", (selection) => selectElement("mixed", selection),
+        "Before $\\frac{1}{2}$ after.");
+
+      assertCopy("ChatGPT partial formula selection", (selection) => {
+        const text = document.querySelector("#mixed .rendered").firstChild;
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, 1);
+        selection.addRange(range);
+      }, "$\\frac{1}{2}$");
+
+      assertCopy("ChatGPT display formula", (selection) => selectElement("block", selection),
+        "$$\nx^2+y^2=z^2\n$$");
+
+      assertCopy("KaTeX annotation fallback", (selection) => selectElement("katex", selection),
+        "A $x^2$ B");
+
+      assertCopy("MathML fallback", (selection) => selectElement("mathml", selection),
+        "C $\\frac{1}{3}$ D");
+
+      let overwritten = false;
+      document.addEventListener("copy", () => { overwritten = true; });
+      getSelection().removeAllRanges();
+      selectElement("mixed", getSelection());
+      copySelected();
+      if (overwritten) throw new Error("Page copy handler overwrote clipboard");
+      results.push("PASS later page copy handler blocked");
+    } catch (error) {
+      results.push(`FAIL ${error.message}`);
+    }
+
+    document.body.textContent = results.join("\n");
+  </script>
+</body>

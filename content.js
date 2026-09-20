@@ -30,6 +30,7 @@
       event.clipboardData.setData("text/plain", markdown);
       event.clipboardData.setData("text/markdown", markdown);
       event.preventDefault();
+      event.stopImmediatePropagation();
       showToast(`Copied for Typora (${copyStats.mathCount} formulas)`);
     },
     true
@@ -166,13 +167,29 @@
   }
 
   function formatMathText(tex, isBlock) {
-    const trimmed = tex.trim();
+    let trimmed = tex.trim();
+    if (/^\\\[[\s\S]*\\\]$/.test(trimmed)) {
+      trimmed = trimmed.slice(2, -2).trim();
+      isBlock = true;
+    } else if (/^\$\$[\s\S]*\$\$$/.test(trimmed)) {
+      trimmed = trimmed.slice(2, -2).trim();
+      isBlock = true;
+    } else if (/^\\\([\s\S]*\\\)$/.test(trimmed)) {
+      trimmed = trimmed.slice(2, -2).trim();
+    } else if (/^\$[^$]*\$$/.test(trimmed)) {
+      trimmed = trimmed.slice(1, -1).trim();
+    }
+    if (!trimmed) return "";
     copyStats.mathCount += 1;
     return isBlock ? `\n\n$$\n${trimmed}\n$$\n\n` : `$${trimmed}$`;
   }
 
   function getTexFromMathNode(node) {
     if (isMathTexScript(node)) return node.textContent || "";
+
+    const sourceHolder = node.closest?.("[data-math-source]");
+    const source = sourceHolder?.getAttribute("data-math-source");
+    if (source?.trim()) return source;
 
     const annotation = node.querySelector("annotation[encoding='application/x-tex']");
     if (annotation?.textContent) return annotation.textContent;
@@ -200,6 +217,7 @@
 
   function getMathRootForCurrentElement(node) {
     if (isMathTexScript(node)) return node;
+    if (node.matches?.("[data-math-source]")) return node;
     if (node.matches?.(".katex-display")) return node;
     if (node.matches?.(".katex") && !node.closest(".katex-display")) return node;
     if (node.matches?.("mjx-container, .MathJax, math")) return node;
@@ -208,7 +226,8 @@
 
   function closestMathRoot(node) {
     if (!node?.closest) return null;
-    return node.closest(".katex-display, .katex, mjx-container, .MathJax, math, script[type^='math/tex']");
+    return node.closest("[data-math-source]") ||
+      node.closest(".katex-display, .katex, mjx-container, .MathJax, math, script[type^='math/tex']");
   }
 
   function isMathTexScript(node) {
@@ -223,9 +242,13 @@
 
     return (
       node.classList?.contains("katex-display") ||
+      node.classList?.contains("math-display") ||
       Boolean(node.closest?.(".katex-display")) ||
+      Boolean(node.querySelector?.(".katex-display")) ||
       node.getAttribute("display") === "true" ||
+      node.getAttribute("display") === "block" ||
       node.getAttribute("data-display") === "true" ||
+      node.getAttribute("data-math-style") === "display" ||
       node.closest?.(".katex-display, [display='true'], [data-display='true']")
     );
   }

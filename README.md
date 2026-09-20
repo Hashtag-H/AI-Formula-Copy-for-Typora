@@ -7,7 +7,7 @@
 - 在常见 AI 聊天页面右键选区，选择 `复制为 Typora Markdown`。
 - 在常见 AI 聊天页面选中内容后，直接按 `Ctrl+C` 也会自动转换。
 - 快捷键：`Ctrl+Shift+Y`，macOS 为 `Command+Shift+Y`。
-- 针对 ChatGPT 当前页面，会优先从真实 KaTeX / MathJax 节点提取原始 TeX。
+- 针对 ChatGPT 当前页面，会优先读取公式节点的 `data-math-source`，并兼容 KaTeX / MathJax 中的原始 TeX。
 - 针对 Gemini 等可能使用 MathML 的页面，会尝试把 MathML 转成 LaTeX。
 - 把 ChatGPT 常见的 LaTeX 分隔符转换为 Typora 常用格式：
 
@@ -58,6 +58,8 @@ $$
 3. 打开右上角的 `开发者模式`。
 4. 点击 `加载已解压的扩展程序`。
 5. 选择本项目文件夹。
+
+更新插件文件后，需要在扩展管理页面点击该插件的“重新加载”，然后刷新已打开的 AI 聊天网页。
 
 ## 使用
 
